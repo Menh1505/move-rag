@@ -1,73 +1,147 @@
-from langchain_community.document_loaders import TextLoader
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from langchain_anthropic import ChatAnthropic
+from markdown_it import MarkdownIt
+from dotenv import dotenv_values
+from langchain.schema import Document
+import os
+import pickle
 
-# Hàm để tải và xử lý tài liệu
-def load_documents(file_path):
-    loader = TextLoader(file_path)
-    return loader.load()
+ENV = dotenv_values(".env")
+print("Environment Variables Loaded:", ENV)
+# Thiết lập API key cho Anthropic
+os.environ["ANTHROPIC_API_KEY"] = ENV['ANTHROPIC_API_KEY']
 
-# Hàm để chia tài liệu thành các đoạn văn
+# Đường dẫn lưu trữ FAISS vectorstore trong thư mục làm việc
+FAISS_PATH = os.path.join(os.getcwd(), "faiss_index")
+
+# Hàm tải và đọc file Markdown từ thư mục
+def load_markdown_files(directory_path):
+    md_files = []
+    for filename in os.listdir(directory_path):
+        if filename.endswith(".md"):
+            with open(os.path.join(directory_path, filename), "r", encoding="utf-8") as file:
+                md_files.append(file.read())
+    return md_files
+
+# Hàm phân tích cú pháp Markdown
+def parse_markdown(md_text):
+    md = MarkdownIt()
+    tokens = md.parse(md_text)
+    elements = {"headings": [], "paragraphs": [], "code_blocks": []}
+    
+    current_heading = None
+    for token in tokens:
+        if token.type == 'heading_open':
+            current_heading = token.tag  # Lưu cấp độ tiêu đề (h1, h2, h3, ...)
+        elif token.type == 'inline' and current_heading:
+            elements["headings"].append({"level": current_heading, "content": token.content})
+            current_heading = None
+        elif token.type == 'paragraph_open':
+            elements["paragraphs"].append(token.content)
+        elif token.type == 'fence':
+            elements["code_blocks"].append({"language": token.info, "content": token.content})
+    return elements
+
+# Hàm xử lý Markdown và chuyển đổi thành văn bản
+def process_markdown_files(md_files):
+    processed_documents = []
+    for md_text in md_files:
+        elements = parse_markdown(md_text)
+        # Kết hợp các phần tử Markdown thành một chuỗi văn bản
+        text = ""
+        for heading in elements["headings"]:
+            text += f"{'#' * int(heading['level'][1])} {heading['content']}\n"
+        for paragraph in elements["paragraphs"]:
+            text += f"{paragraph}\n"
+        for code_block in elements["code_blocks"]:
+            text += f"```{code_block['language']}\n{code_block['content']}\n```\n"
+        
+        # Tạo đối tượng Document
+        document = Document(page_content=text, metadata={"source": "markdown"})
+        processed_documents.append(document)
+    return processed_documents
+
+# Hàm chia nhỏ tài liệu thành các đoạn văn
 def split_documents(documents, chunk_size=500, chunk_overlap=50):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     return text_splitter.split_documents(documents)
 
-# Hàm để tạo embeddings cho văn bản
-def create_embeddings(chunks, model_name="sentence-transformers/all-MiniLM-L6-v2"):
-    embedding_model = HuggingFaceEmbeddings(model_name=model_name)  # Khởi tạo đối tượng embedding_model
-    return embedding_model  # Trả về đối tượng embedding_model thay vì embeddings
+# Hàm tạo hoặc tải FAISS vectorstore
+def create_or_load_faiss_vectorstore(documents=None, embedding_model_name="sentence-transformers/all-MiniLM-L6-v2"):
+    # Kiểm tra nếu FAISS đã tồn tại
+    if os.path.exists(f"{FAISS_PATH}.pkl"):
+        print("Loading existing FAISS index...")
+        with open(f"{FAISS_PATH}.pkl", "rb") as f:
+            faiss_index = pickle.load(f)
+        return faiss_index
+    else:
+        print("Creating new FAISS index...")
+        if not documents or len(documents) == 0:
+            raise ValueError("No documents found to create FAISS index. Please check your input data.")
+        
+        # Tạo embeddings
+        embedding_model = HuggingFaceEmbeddings(model_name=embedding_model_name)
+        faiss_index = FAISS.from_documents(documents=documents, embedding=embedding_model)
+        
+        # Lưu FAISS index
+        with open(f"{FAISS_PATH}.pkl", "wb") as f:
+            pickle.dump(faiss_index, f)
+        return faiss_index
 
-# Hàm để tạo FAISS vector store
-def create_vectorstore(chunks, embedding_model):
-    # Sử dụng embedding_model (chưa gọi embed_documents) để FAISS tự động gọi embed_documents
-    return FAISS.from_documents(documents=chunks, embedding=embedding_model)
+# Hàm truy xuất dữ liệu từ FAISS
+def retrieve_relevant_chunks(query, faiss_index, top_k=5):
+    results = faiss_index.similarity_search(query, k=top_k)
+    return "\n".join([result.page_content for result in results])
 
-# Hàm để tải mô hình GPT-2 và tokenizer
-def load_gpt2_model():
+# Hàm sinh văn bản với Claude AI
+def generate_text_with_anthropic(input_text, max_tokens=100):
     try:
-        print("Loading GPT-2 model...")
-        model_name = "gpt2"
-        model = GPT2LMHeadModel.from_pretrained(model_name)
-        tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token  # Chỉ định pad_token là eos_token
-        print("Model loaded successfully!")
-        return model, tokenizer
+        chat_model = ChatAnthropic(model="claude-2")  # Sử dụng mô hình Claude-2
+        response = chat_model.invoke(input_text, max_tokens=max_tokens)
+        return response
     except Exception as e:
-        print(f"Error loading model: {e}")
-        return None, None
+        print(f"Error generating text with Anthropic: {e}")
+        return None
 
-# Hàm để sinh văn bản từ mô hình GPT-2
-def generate_text(model, tokenizer, input_text, max_length=50):
-    # Tạo input ids và attention mask
-    inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
-    inputs['attention_mask'] = inputs['input_ids'].ne(tokenizer.pad_token_id).float()
-
-    # Sinh văn bản
-    outputs = model.generate(inputs['input_ids'], attention_mask=inputs['attention_mask'], max_length=max_length)
-    
-    # Trả lại văn bản đã sinh
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-# Main function to run the pipeline
+# Hàm chính
 def main():
-    # Load and process documents
-    documents = load_documents("./test.txt")
-    chunks = split_documents(documents)
+    # Đường dẫn thư mục chứa tài liệu Markdown
+    directory_path = "./documents"
 
-    # Generate embeddings and create vectorstore
-    embedding_model = create_embeddings(chunks)  # Trả về đối tượng embedding_model
-    vectorstore = create_vectorstore(chunks, embedding_model)  # Sử dụng embedding_model
+    try:
+        # Tải và xử lý file Markdown
+        md_files = load_markdown_files(directory_path)
+        processed_texts = process_markdown_files(md_files)
+        
+        # Tạo hoặc tải FAISS vectorstore
+        faiss_index = create_or_load_faiss_vectorstore(processed_texts)
+        
+        # Nhập câu hỏi từ người dùng
+        query = input("Enter your question about Move: ")
+        
+        # Truy xuất dữ liệu liên quan từ FAISS
+        relevant_chunks = retrieve_relevant_chunks(query, faiss_index)
+        print("\nRelevant Chunks Retrieved:")
+        print(relevant_chunks)
+        
+        # Gửi câu hỏi và dữ liệu liên quan đến Claude AI
+        input_text = f"Here is some context about Move:\n{relevant_chunks}\n\nQuestion: {query}"
+        generated_text = generate_text_with_anthropic(input_text, max_tokens=300)
+        
+        # Hiển thị kết quả
+        if generated_text:
+            print("\nGenerated Response:")
+            print(generated_text)
+    except ValueError as ve:
+        print(f"ValueError: {ve}")
+    except RuntimeError as re:
+        print(f"RuntimeError: {re}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
 
-    # Load GPT-2 model and tokenizer
-    model, tokenizer = load_gpt2_model()
-    if model and tokenizer:
-        # Generate text from GPT-2
-        input_text = "What do you know about Move code?"
-        generated_text = generate_text(model, tokenizer, input_text, max_length=50)
-        print("Generated Text:", generated_text)
-
-# Run the main function
+# Chạy chương trình
 if __name__ == "__main__":
     main()
