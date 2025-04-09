@@ -4,6 +4,10 @@ import os
 import faiss
 import numpy as np
 from typing import List, Dict
+import logging
+
+# Cấu hình logging cho module
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class GeminiProcessor:
     def __init__(self, api_key: str):
@@ -30,13 +34,14 @@ class GeminiProcessor:
         }
 
         try:
+            logging.info("Sending request to Gemini API with prompt: %s", prompt)
             response = requests.post(self.endpoint, headers=headers, params=params, json=data)
             response.raise_for_status()  # Kiểm tra lỗi HTTP
             result = response.json()
             # Trích xuất văn bản từ phản hồi
             return result.get("contents", [{}])[0].get("parts", [{}])[0].get("text", "")
         except requests.exceptions.RequestException as e:
-            print(f"Error calling Gemini API: {e}")
+            logging.error("Error calling Gemini API: %s", e)
             return None
 
 
@@ -61,9 +66,10 @@ class DataProcessor:
             # Tải FAISS index
             self.index = faiss.read_index(self.vector_path)
 
+            logging.info("Loaded %d blocks and %d metadata entries.", len(blocks), len(metadata))
             return blocks, metadata
         except Exception as e:
-            print(f"Error loading data: {e}")
+            logging.error("Error loading data: %s", e)
             return None, None
 
     def search_similar(self, query_vector: np.ndarray, k: int = 5) -> List[Dict]:
@@ -71,6 +77,7 @@ class DataProcessor:
         Tìm kiếm các blocks tương tự trong FAISS index.
         """
         if self.index is None:
+            logging.error("FAISS index is not loaded.")
             raise ValueError("FAISS index is not loaded.")
         
         D, I = self.index.search(query_vector.reshape(1, -1), k)
@@ -81,4 +88,5 @@ class DataProcessor:
                 'content': blocks[idx],
                 'metadata': metadata[idx]
             })
+        logging.info("Found %d similar blocks.", len(results))
         return results
