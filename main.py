@@ -1,6 +1,6 @@
 from langchain_anthropic import ChatAnthropic
 from dotenv import dotenv_values
-from data_processing import process_and_create_faiss, retrieve_relevant_chunks
+from markdown_process import process_and_create_faiss, retrieve_relevant_chunks
 import os
 
 # Tải biến môi trường
