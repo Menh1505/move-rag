@@ -1,5 +1,7 @@
 .env
 *.pkl
-data/
 __pycache__/
 *.pyc
+
+data/
+documents/
