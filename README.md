@@ -9,12 +9,19 @@ MoveLazy AI is a Python-based project that processes Markdown documents, creates
 - **Text Generation**: Uses Anthropic's Claude AI to generate responses based on user queries and relevant document chunks.
 - **Customizable**: Supports configurable chunk sizes, overlap, and embedding models.
 
+![visualization](https://github.com/user-attachments/assets/ebc75122-a175-4436-add0-4fa779d1ad2c)
+
 ## Project Structure
-├── .env # Environment variables file 
-├── .gitignore # Git ignore file 
-├── faiss_index.pkl # Serialized FAISS index (generated after first run) 
-├── main.py # Main script 
-├── documents/ # Directory containing Markdown documents 
+├── .env # Environment variables file
+
+├── .gitignore # Git ignore file
+
+├── faiss_index.pkl # Serialized FAISS index (generated after first run)
+
+├── main.py # Main script
+
+├── documents/ # Directory containing Markdown documents
+
 │ ├── ...
 
 ## Requirements
