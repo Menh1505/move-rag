@@ -3,12 +3,18 @@ from src.gemini_module import GeminiProcessor, DataProcessor
 import numpy as np
 import logging
 
-# Cấu hình logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# Cấu hình logging để ghi vào file
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("app.log"),  # Ghi log vào file app.log
+        # Không sử dụng StreamHandler để không in ra console
+    ]
+)
 
 # Tải biến môi trường
 ENV = dotenv_values(".env")
-logging.info("Environment Variables Loaded: %s", ENV)
 
 # Hàm chính để gọi model Gemini
 def main():
@@ -16,35 +22,65 @@ def main():
     BLOCKS_PATH = "./data/blocks.json"
     METADATA_PATH = "./data/metadata.json"
     VECTOR_PATH = "./data/vectors.faiss"
-    API_KEY = ENV['ANTHROPIC_API_KEY']
+    API_KEY = ENV['GOOGLE_API_KEY']
 
     # Khởi tạo các module
-    logging.info("Initializing GeminiProcessor and DataProcessor...")
     gemini = GeminiProcessor(api_key=API_KEY)
     data_processor = DataProcessor(BLOCKS_PATH, METADATA_PATH, VECTOR_PATH)
 
     try:
         # Tải dữ liệu và FAISS index
-        logging.info("Loading data from %s, %s, and %s...", BLOCKS_PATH, METADATA_PATH, VECTOR_PATH)
         blocks, metadata = data_processor.load_data()
-        logging.debug("Loaded %d blocks and %d metadata entries.", len(blocks), len(metadata))
+
+        # Kiểm tra xem blocks và metadata có được tải thành công không
+        if blocks is None or metadata is None:
+            logging.error("Failed to load blocks or metadata.")
+            return
 
         # Nhập câu hỏi từ người dùng
         query = input("Enter your question: ")
-        logging.info("User query: %s", query)
 
         # Chuyển câu hỏi thành vector (giả sử bạn có mô hình embedding để tạo vector)
-        # Ở đây, bạn cần thay thế `query_vector` bằng vector thực tế từ mô hình embedding
-        query_vector = np.random.rand(768).astype('float32')  # Thay thế bằng vector thực tế
-        logging.debug("Generated query vector: %s", query_vector)
+        query_vector = np.random.rand(384).astype('float32')  # Thay thế bằng vector thực tế
 
         # Tìm kiếm các đoạn văn bản liên quan
         logging.info("Searching for similar blocks...")
-        similar_blocks = data_processor.search_similar(query_vector)
-        logging.debug("Found %d similar blocks.", len(similar_blocks))
+        try:
+            similar_blocks = data_processor.search_similar(query_vector)
+            logging.info("Successfully retrieved %d similar blocks.", len(similar_blocks))
+        except Exception as e:
+            logging.error("Error during searching similar blocks: %s", e)
+            return
+        
+        # Kiểm tra xem có blocks nào được tìm thấy không
+        if not similar_blocks:
+            logging.warning("No similar blocks found.")
+            print("No similar blocks found.")
+            return
 
-        context = "\n".join([block['content'] for block in similar_blocks])
-        logging.debug("Context for Gemini API: %s", context)
+        # In nội dung của similar_blocks để kiểm tra
+        logging.debug("Similar blocks content: %s", similar_blocks)
+
+        # Kiểm tra cấu trúc của similar_blocks
+        for block in similar_blocks:
+            if not isinstance(block, dict):
+                logging.error("Expected a dictionary but got: %s", block)
+            if 'content' not in block:
+                logging.error("Block does not contain 'content': %s", block)
+
+        # Tạo context từ nội dung của các blocks
+        try:
+            context = "\n".join([block['content']['content'] for block in similar_blocks if isinstance(block['content'], dict) and 'content' in block['content']])
+            logging.debug("Generated context from similar blocks: %s", context)
+        except Exception as e:
+            logging.error("Error creating context from similar blocks: %s", e)
+            return
+
+        # Kiểm tra nếu context rỗng
+        if not context.strip():
+            logging.warning("Context is empty. Skipping request to Gemini API.")
+            print("No valid content found in similar blocks.")
+            return
 
         # Gửi câu hỏi và ngữ cảnh đến Gemini API
         prompt = f"Context: {context}\n\nQuestion: {query}"
